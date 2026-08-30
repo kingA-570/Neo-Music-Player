@@ -7,6 +7,8 @@ let playlists = [];
 let isRegisterMode = false;
 let selectedPlaylistId = null;
 let isMinimized = false;
+let sourceFallbackIndex = 0;
+let activeTrackSources = [];
 
 const recentCards = document.getElementById('recent-cards');
 const trackList = document.getElementById('track-list');
@@ -343,6 +345,47 @@ function pausePlayback() {
     updatePlayButton();
 }
 
+function getTrackSources(track, index) {
+    const sources = [];
+    if (track.streamUrl && /^https?:\/\//.test(track.streamUrl)) {
+        sources.push(track.streamUrl);
+    }
+    if (track.videoId) {
+        sources.push(`/api/play/${encodeURIComponent(track.videoId)}`);
+    }
+    const previewSource = track.preview || track.previewUrl;
+    if (previewSource && /^https?:\/\//.test(previewSource)) {
+        sources.push(previewSource);
+    }
+    const fallbackPreview = mockPreviews[Math.abs(index) % mockPreviews.length];
+    if (fallbackPreview) {
+        sources.push(fallbackPreview);
+    }
+    return [...new Set(sources)];
+}
+
+function tryPlaySourceAt(index) {
+    if (index < 0 || index >= activeTrackSources.length) {
+        return false;
+    }
+
+    sourceFallbackIndex = index;
+    audioPlayer.src = activeTrackSources[index];
+    audioPlayer.load();
+    audioPlayer.play().then(() => {
+        isPlaying = true;
+        updatePlayButton();
+    }).catch(() => {
+        const triedFallback = tryPlaySourceAt(index + 1);
+        if (!triedFallback) {
+            isPlaying = false;
+            updatePlayButton();
+        }
+    });
+
+    return true;
+}
+
 function updateAuthUi() {
     if (!currentUser) {
         authStatus.textContent = 'Log in to save playlists';
@@ -411,44 +454,20 @@ function playTrack(index) {
     renderCards(currentTracks);
     renderTrackList(currentTracks);
 
-    // Prefer direct stream URL (Audius/mock), else proxied stream (YouTube), else preview
-    const audioSrc = (track.streamUrl && /^https?:\/\//.test(track.streamUrl))
-        ? track.streamUrl
-        : (track.videoId
-            ? `/api/play/${track.videoId}`
-            : (track.preview && /^https?:\/\//.test(track.preview) ? track.preview : ''));
-
-    if (!audioSrc) {
+    activeTrackSources = getTrackSources(track, index);
+    sourceFallbackIndex = 0;
+    if (!activeTrackSources.length) {
         trackMeta.textContent = 'Preview unavailable for this track.';
         pausePlayback();
         return;
     }
-
-    audioPlayer.src = audioSrc;
-    audioPlayer.load();
-    audioPlayer.play().then(() => {
-        isPlaying = true;
-        updatePlayButton();
-    }).catch(() => {
-        isPlaying = false;
-        updatePlayButton();
-    });
+    tryPlaySourceAt(0);
 }
 
 // When a track fails to stream (e.g. yt-dlp down), fall back to a guaranteed-playable preview
 audioPlayer.addEventListener('error', function () {
-    if (audioPlayer.src && audioPlayer.src.indexOf('/api/play/') !== -1) {
-        const fallback = mockPreviews[currentTrackIndex % mockPreviews.length];
-        if (fallback) {
-            console.warn('Stream failed, using fallback preview:', fallback);
-            audioPlayer.src = fallback;
-            audioPlayer.load();
-            audioPlayer.play().then(() => {
-                isPlaying = true;
-                updatePlayButton();
-            }).catch(() => {});
-            return;
-        }
+    if (tryPlaySourceAt(sourceFallbackIndex + 1)) {
+        return;
     }
     isPlaying = false;
     updatePlayButton();
