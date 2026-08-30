@@ -1,0 +1,176 @@
+﻿<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover">
+    <meta name="theme-color" content="#060606">
+    <title>Pulse - Music for Everyone</title>
+    <link rel="icon" type="image/png" href="logo1.png">
+    <link rel="stylesheet" href="style.css?v=6">
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Montserrat:ital,wght@0,100..900;1,100..900&display=swap" rel="stylesheet">
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.5.2/css/all.min.css">
+</head>
+<body>
+    <div class="app-shell">
+        <aside class="sidebar">
+            <div class="brand">
+                <img src="logo1.png" alt="Pulse logo" class="brand-logo">
+                <div>
+                    <p class="brand-label">Pulse</p>
+                    <small>Music first.</small>
+                </div>
+            </div>
+
+            <nav class="nav-section">
+                <a href="#" class="nav-link active"><i class="fa-solid fa-house"></i>Home</a>
+                <a href="#search" class="nav-link"><i class="fa-solid fa-magnifying-glass"></i>Search</a>
+                <a href="#library" class="nav-link"><i class="fa-solid fa-book"></i>Your Library</a>
+            </nav>
+
+            <div class="library-panel" id="library">
+                <div class="panel-header">
+                    <div>
+                        <p class="panel-title">Your Library</p>
+                        <small>Playlists & account</small>
+                    </div>
+                    <button class="icon-button" id="auth-toggle"><i class="fa-solid fa-user"></i></button>
+                </div>
+
+                <div class="library-card">
+                    <strong id="auth-status">Log in to save playlists</strong>
+                    <p id="auth-message">Your favorites and playlists stay on this device.</p>
+                    <button class="badge" id="create-playlist-btn">Create Playlist</button>
+                </div>
+
+                <div class="library-card">
+                    <strong>Playlists</strong>
+                    <div id="playlist-list" class="playlist-list"></div>
+                </div>
+            </div>
+        </aside>
+
+        <main class="content">
+            <header class="top-bar">
+                <div>
+                    <h1>Welcome back</h1>
+                    <p>Stream, explore, and play your favorite music.</p>
+                </div>
+                <div class="top-actions">
+                    <div class="search-wrap" id="search">
+                        <i class="fa-solid fa-magnifying-glass"></i>
+                        <input type="search" id="search-input" placeholder="Search tracks, artists, playlists" aria-label="Search music">
+                    </div>
+                    <button class="profile-button" id="profile-button"><i class="fa-regular fa-user"></i> Me</button>
+                </div>
+            </header>
+
+            <div class="quick-pills" id="trend-pills" aria-label="Trending searches">
+                <button class="quick-pill" type="button" data-query="trending music">Trending</button>
+                <button class="quick-pill" type="button" data-query="lofi beats">Lo-fi</button>
+                <button class="quick-pill" type="button" data-query="indie pop">Indie</button>
+                <button class="quick-pill" type="button" data-query="late night vibes">Night</button>
+            </div>
+
+            <section class="hero-card">
+                <div>
+                    <span class="pill">YouTube-style streaming</span>
+                    <h2>Pulse is your music home.</h2>
+                    <p>Search tracks, save playlists, and stream a built-in player directly inside the app.</p>
+                </div>
+                <div class="hero-actions">
+                    <button class="badge" id="add-to-playlist-btn">Save Current Track</button>
+                    <button class="badge dark">Discover</button>
+                </div>
+            </section>
+
+            <section class="section cards-section">
+                <div class="section-header">
+                    <h2>Recently played</h2>
+                    <span>Curated for you</span>
+                </div>
+                <div class="cards" id="recent-cards"></div>
+            </section>
+
+            <section class="section track-list-section">
+                <div class="section-header">
+                    <h2>Featured tracks</h2>
+                    <span>Tap a row to play</span>
+                </div>
+                <div class="track-table">
+                    <div class="track-row header-row">
+                        <span>Track</span>
+                        <span>Album</span>
+                        <span>Duration</span>
+                    </div>
+                    <div id="track-list"></div>
+                </div>
+            </section>
+
+            <footer class="app-footer">Made by kingA</footer>
+        </main>
+
+        <footer class="player-bar" id="player-bar">
+            <div class="player-info">
+                <img src="card2img.jpeg" alt="Now playing cover" class="now-playing-cover" id="now-playing-cover">
+                <div class="player-title-wrap">
+                    <p class="track-title" id="track-title">Choose a track</p>
+                    <p class="track-meta" id="track-meta">Pulse • Streaming demo</p>
+                </div>
+            </div>
+
+            <div class="player-controls">
+                <button class="control-button" id="prev-button" aria-label="Previous track"><i class="fa-solid fa-backward-step"></i></button>
+                <button class="control-button play-button" id="play-button" aria-label="Play or pause"><i class="fa-solid fa-play"></i></button>
+                <button class="control-button" id="next-button" aria-label="Next track"><i class="fa-solid fa-forward-step"></i></button>
+            </div>
+
+            <div class="progress-group">
+                <span id="current-time">0:00</span>
+                <input type="range" id="progress-bar" min="0" max="100" value="0" step="1" aria-label="Seek">
+                <span id="duration">0:00</span>
+            </div>
+
+            <div class="player-side-actions">
+                <div class="volume-wrap">
+                    <button class="control-button small" id="volume-btn" aria-label="Mute or unmute"><i class="fa-solid fa-volume-high"></i></button>
+                    <input type="range" id="volume-bar" min="0" max="1" step="0.01" value="0.8" aria-label="Volume">
+                </div>
+                <button class="control-button small" id="minimize-player-btn" aria-label="Minimize player"><i class="fa-solid fa-chevron-down"></i></button>
+            </div>
+
+            <audio id="audio-player"></audio>
+        </footer>
+    </div>
+
+    <div class="mini-player hidden" id="mini-player">
+        <img src="card2img.jpeg" alt="Now playing" class="mini-cover" id="mini-cover">
+        <div class="mini-info" id="mini-info">
+            <p class="mini-title" id="mini-title">Choose a track</p>
+            <p class="mini-meta" id="mini-meta">Pulse</p>
+        </div>
+        <button class="mini-control" id="mini-prev" aria-label="Previous"><i class="fa-solid fa-backward-step"></i></button>
+        <button class="mini-control mini-play" id="mini-play" aria-label="Play or pause"><i class="fa-solid fa-play"></i></button>
+        <button class="mini-control" id="mini-next" aria-label="Next"><i class="fa-solid fa-forward-step"></i></button>
+        <button class="mini-control" id="mini-close" aria-label="Expand player"><i class="fa-solid fa-chevron-up"></i></button>
+    </div>
+
+    <div class="modal" id="auth-modal" aria-hidden="true">
+        <div class="modal-card">
+            <h3 id="auth-modal-title">Sign in to Pulse</h3>
+            <p>Sign in or create an account to sync your playlists.</p>
+            <form id="login-form">
+                <input type="text" id="username" placeholder="Username" required>
+                <input type="email" id="email" placeholder="Email (required for registration)" style="display:none;">
+                <input type="password" id="password" placeholder="Password" required>
+                <button class="badge" type="submit" id="auth-submit-btn">Sign In</button>
+            </form>
+            <button class="text-button" id="auth-mode-toggle">Create account instead</button>
+            <button class="text-button" id="close-auth">Close</button>
+        </div>
+    </div>
+
+    <script src="script.js?v=4"></script>
+</body>
+</html>
