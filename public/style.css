@@ -401,13 +401,17 @@ input {
 
 .track-row {
     display: grid;
-    grid-template-columns: 2fr 1fr 0.8fr;
+    grid-template-columns: minmax(0, 2fr) minmax(0, 1fr) minmax(0, 0.8fr);
     gap: 1rem;
     align-items: center;
     padding: 1rem 1.2rem;
     border-bottom: 1px solid rgba(255, 255, 255, 0.08);
     cursor: pointer;
     transition: background 0.18s ease;
+}
+
+.track-row > * {
+    min-width: 0;
 }
 
 .track-row:last-child {
@@ -436,6 +440,14 @@ input {
 
 .track-info small {
     opacity: 0.7;
+}
+
+.track-title-text,
+.track-info small,
+.track-row > span {
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
 }
 
 .header-row {
@@ -1209,6 +1221,15 @@ input[type="range"] {
 
     .track-info {
         padding-left: 1.4rem;
+    }
+
+    .track-title-text,
+    .track-info small,
+    .track-row > span {
+        white-space: normal;
+        overflow: visible;
+        text-overflow: clip;
+        overflow-wrap: anywhere;
     }
 
     /* Player bar: Spotify-style stacked mobile layout */

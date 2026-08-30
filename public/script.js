@@ -7,6 +7,9 @@ let playlists = [];
 let isRegisterMode = false;
 let selectedPlaylistId = null;
 let isMinimized = false;
+let currentTrackSources = [];
+let sourceFallbackIndex = 0;
+let shouldPlayCurrentTrack = false;
 
 const recentCards = document.getElementById('recent-cards');
 const trackList = document.getElementById('track-list');
@@ -160,6 +163,72 @@ function formatTime(seconds) {
     const mins = Math.floor(seconds / 60);
     const secs = Math.floor(seconds % 60);
     return `${mins}:${secs.toString().padStart(2, '0')}`;
+}
+
+function isHttpAudioSource(source) {
+    return typeof source === 'string' && /^https?:\/\//.test(source);
+}
+
+function buildTrackSources(track, index) {
+    const mockPreview = mockPreviews[((index % mockPreviews.length) + mockPreviews.length) % mockPreviews.length] || mockPreviews[0] || '';
+    const sources = [
+        isHttpAudioSource(track.streamUrl) ? track.streamUrl : '',
+        track.videoId ? `/api/play/${encodeURIComponent(track.videoId)}` : '',
+        isHttpAudioSource(track.preview) ? track.preview : '',
+        isHttpAudioSource(track.previewUrl) ? track.previewUrl : '',
+        mockPreview
+    ];
+    return [...new Set(sources.filter(Boolean))];
+}
+
+function retryCurrentTrackSource(attemptIndex) {
+    if (!shouldPlayCurrentTrack || attemptIndex !== sourceFallbackIndex) {
+        return;
+    }
+
+    if (sourceFallbackIndex < currentTrackSources.length - 1) {
+        sourceFallbackIndex += 1;
+        playCurrentSource();
+        return;
+    }
+
+    shouldPlayCurrentTrack = false;
+    isPlaying = false;
+    updatePlayButton();
+    if (trackMeta) trackMeta.textContent = 'Stream unavailable.';
+}
+
+function playCurrentSource() {
+    if (!currentTrackSources.length || sourceFallbackIndex >= currentTrackSources.length) {
+        shouldPlayCurrentTrack = false;
+        isPlaying = false;
+        updatePlayButton();
+        if (trackMeta) trackMeta.textContent = 'Stream unavailable.';
+        return;
+    }
+
+    const attemptIndex = sourceFallbackIndex;
+    audioPlayer.src = currentTrackSources[attemptIndex];
+    audioPlayer.load();
+
+    if (!shouldPlayCurrentTrack) {
+        isPlaying = false;
+        updatePlayButton();
+        return;
+    }
+
+    audioPlayer.play().then(() => {
+        isPlaying = true;
+        updatePlayButton();
+    }).catch((error) => {
+        if (error && error.name === 'NotAllowedError') {
+            shouldPlayCurrentTrack = false;
+            isPlaying = false;
+            updatePlayButton();
+            return;
+        }
+        retryCurrentTrackSource(attemptIndex);
+    });
 }
 
 function getStoredUser() {
@@ -339,6 +408,7 @@ function updatePlayButton() {
 
 function pausePlayback() {
     audioPlayer.pause();
+    shouldPlayCurrentTrack = false;
     isPlaying = false;
     updatePlayButton();
 }
@@ -411,48 +481,22 @@ function playTrack(index) {
     renderCards(currentTracks);
     renderTrackList(currentTracks);
 
-    // Prefer direct stream URL (Audius/mock), else proxied stream (YouTube), else preview
-    const audioSrc = (track.streamUrl && /^https?:\/\//.test(track.streamUrl))
-        ? track.streamUrl
-        : (track.videoId
-            ? `/api/play/${track.videoId}`
-            : (track.preview && /^https?:\/\//.test(track.preview) ? track.preview : ''));
+    currentTrackSources = buildTrackSources(track, index);
+    sourceFallbackIndex = 0;
+    shouldPlayCurrentTrack = true;
 
-    if (!audioSrc) {
+    if (!currentTrackSources.length) {
         trackMeta.textContent = 'Preview unavailable for this track.';
         pausePlayback();
         return;
     }
 
-    audioPlayer.src = audioSrc;
-    audioPlayer.load();
-    audioPlayer.play().then(() => {
-        isPlaying = true;
-        updatePlayButton();
-    }).catch(() => {
-        isPlaying = false;
-        updatePlayButton();
-    });
+    playCurrentSource();
 }
 
-// When a track fails to stream (e.g. yt-dlp down), fall back to a guaranteed-playable preview
+// When a source fails, retry the next fallback source for the current track
 audioPlayer.addEventListener('error', function () {
-    if (audioPlayer.src && audioPlayer.src.indexOf('/api/play/') !== -1) {
-        const fallback = mockPreviews[currentTrackIndex % mockPreviews.length];
-        if (fallback) {
-            console.warn('Stream failed, using fallback preview:', fallback);
-            audioPlayer.src = fallback;
-            audioPlayer.load();
-            audioPlayer.play().then(() => {
-                isPlaying = true;
-                updatePlayButton();
-            }).catch(() => {});
-            return;
-        }
-    }
-    isPlaying = false;
-    updatePlayButton();
-    if (trackMeta) trackMeta.textContent = 'Stream unavailable.';
+    retryCurrentTrackSource(sourceFallbackIndex);
 });
 
 function togglePlayback() {
@@ -466,10 +510,12 @@ function togglePlayback() {
     }
 
     if (audioPlayer.paused) {
+        shouldPlayCurrentTrack = true;
         audioPlayer.play().then(() => {
             isPlaying = true;
             updatePlayButton();
         }).catch(() => {
+            shouldPlayCurrentTrack = false;
             isPlaying = false;
             updatePlayButton();
         });
