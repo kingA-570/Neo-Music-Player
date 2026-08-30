@@ -98,29 +98,110 @@ async function getAudiusTrending(limit = 20) {
 // ── End Audius API ──────────────────────────────────────────────────
 
 async function getAudioStreamUrl(videoId) {
+  if (!videoId) return '';
+  if (!YTDLP) {
+    YTDLP = findYtDlp();
+  }
   if (!YTDLP) {
     console.error('yt-dlp not found. Install it or set YTDLP_PATH env var.');
     return '';
   }
-  return new Promise((resolve) => {
-    execFile(YTDLP, [
+
+  const watchUrl = `https://www.youtube.com/watch?v=${videoId}`;
+  const attempts = [
+    [
+      '--get-url',
+      '--format', 'bestaudio[ext=m4a]/bestaudio/best',
+      '--extractor-args', 'youtube:player_client=android,web',
+      '--no-warnings',
+      '--no-playlist',
+      '--force-ipv4',
+      watchUrl
+    ],
+    [
       '--get-url',
       '--format', 'bestaudio/best',
       '--no-warnings',
       '--no-playlist',
-      `https://www.youtube.com/watch?v=${videoId}`
-    ], { timeout: 20000 }, (err, stdout) => {
-      if (err) {
-        console.error(`yt-dlp failed for ${videoId}:`, err.message);
-        resolve('');
-      } else {
-        const url = stdout.trim().split('\n')[0];
+      '--force-ipv4',
+      watchUrl
+    ],
+    [
+      '-g',
+      '--format', 'bestaudio/best',
+      '--no-warnings',
+      '--no-playlist',
+      '--force-ipv4',
+      watchUrl
+    ]
+  ];
+
+  for (const args of attempts) {
+    const streamUrl = await new Promise((resolve) => {
+      execFile(YTDLP, args, { timeout: 30000, maxBuffer: 1024 * 1024 }, (err, stdout, stderr) => {
+        if (err) {
+          console.error(`yt-dlp failed for ${videoId}:`, (stderr || err.message || '').trim());
+          return resolve('');
+        }
+        const url = (stdout || '')
+          .split('\n')
+          .map((line) => line.trim())
+          .find((line) => /^https?:\/\//i.test(line));
         resolve(url || '');
-      }
+      });
     });
-  });
+
+    if (streamUrl) {
+      return streamUrl;
+    }
+  }
+
+  return '';
 }
 // ── End yt-dlp helper ───────────────────────────────────────────────
+
+async function resolveAudioSource(videoId) {
+  const youtubeUrl = await getAudioStreamUrl(videoId);
+  if (youtubeUrl) {
+    return { url: youtubeUrl, source: 'youtube' };
+  }
+
+  if (!videoId) {
+    return null;
+  }
+
+  try {
+    const audiusRes = await fetch(`${AUDIUS_BASE}/v1/tracks/${encodeURIComponent(videoId)}`, {
+      signal: AbortSignal.timeout(8000)
+    });
+    if (audiusRes.ok) {
+      const data = await audiusRes.json();
+      if (data.data && data.data.id) {
+        return { url: `${AUDIUS_BASE}/v1/tracks/${data.data.id}/stream`, source: 'audius' };
+      }
+    }
+  } catch (audiusError) {
+    console.error('Audius stream fallback error:', audiusError.message);
+  }
+
+  return null;
+}
+
+async function fetchUpstreamResponse(url, rangeHeader) {
+  const headers = {
+    'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0 Safari/537.36',
+    'Accept': '*/*'
+  };
+  if (rangeHeader) headers.Range = rangeHeader;
+
+  const controller = new AbortController();
+  const headerTimer = setTimeout(() => controller.abort(), 20000);
+  try {
+    return await fetch(url, { headers, signal: controller.signal });
+  } finally {
+    clearTimeout(headerTimer);
+  }
+}
 
 // Initialize the YouTube Music API
 let apiInitialized = false;
@@ -440,24 +521,9 @@ router.delete('/playlists/:id', auth, async (req, res) => {
 // GET /api/stream/:videoId - get direct audio stream URL
 router.get('/stream/:videoId', async (req, res) => {
   try {
-    let url = await getAudioStreamUrl(req.params.videoId);
-    if (!url && req.params.videoId) {
-      try {
-        const audiusRes = await fetch(`${AUDIUS_BASE}/v1/tracks/${encodeURIComponent(req.params.videoId)}`, {
-          signal: AbortSignal.timeout(8000)
-        });
-        if (audiusRes.ok) {
-          const data = await audiusRes.json();
-          if (data.data && data.data.id) {
-            url = `${AUDIUS_BASE}/v1/tracks/${data.data.id}/stream`;
-          }
-        }
-      } catch (audiusError) {
-        console.error('Audius stream fallback error:', audiusError.message);
-      }
-    }
-    if (url) {
-      res.json({ url, videoId: req.params.videoId });
+    const source = await resolveAudioSource(req.params.videoId);
+    if (source && source.url) {
+      res.json({ url: source.url, source: source.source, videoId: req.params.videoId });
     } else {
       res.status(404).json({ error: 'No audio stream found' });
     }
@@ -474,44 +540,25 @@ router.get('/play/:videoId', async (req, res) => {
   }, 20000);
 
   try {
-    let url = await getAudioStreamUrl(req.params.videoId);
-    if (!url && req.params.videoId) {
-      // Fallback: try treating it as an Audius track ID
-      try {
-        const audiusRes = await fetch(`${AUDIUS_BASE}/v1/tracks/${encodeURIComponent(req.params.videoId)}`, {
-          signal: AbortSignal.timeout(8000)
-        });
-        if (audiusRes.ok) {
-          const data = await audiusRes.json();
-          if (data.data && data.data.id) {
-            url = `${AUDIUS_BASE}/v1/tracks/${data.data.id}/stream`;
-          }
-        }
-      } catch (audiusError) {
-        console.error('Audius stream fallback error:', audiusError.message);
-      }
-    }
-    if (!url) {
+    let source = await resolveAudioSource(req.params.videoId);
+    if (!source || !source.url) {
       clearTimeout(timeout);
       return res.status(404).json({ error: 'No audio stream found' });
     }
 
-    const headers = {
-      'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0 Safari/537.36'
-    };
-    if (req.headers.range) headers.Range = req.headers.range;
-
-    // Timeout only applies until the upstream response headers arrive.
-    // It must NOT abort the audio body stream, which legitimately runs for minutes.
-    const controller = new AbortController();
-    const headerTimer = setTimeout(() => controller.abort(), 20000);
-    let upstream;
-    try {
-      upstream = await fetch(url, { headers, signal: controller.signal });
-    } finally {
-      clearTimeout(headerTimer);
+    let upstream = await fetchUpstreamResponse(source.url, req.headers.range);
+    if ((!upstream.ok || !upstream.body) && source.source === 'youtube') {
+      const refreshed = await getAudioStreamUrl(req.params.videoId);
+      if (refreshed && refreshed !== source.url) {
+        source = { url: refreshed, source: 'youtube' };
+        upstream = await fetchUpstreamResponse(source.url, req.headers.range);
+      }
     }
     clearTimeout(timeout);
+
+    if (!upstream.ok) {
+      return res.status(502).json({ error: 'Upstream stream request failed' });
+    }
 
     if (!upstream.body) {
       return res.status(502).json({ error: 'Upstream returned no audio body' });
