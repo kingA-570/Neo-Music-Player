@@ -27,6 +27,7 @@ input {
     grid-template-rows: 1fr auto;
     gap: 1rem;
     min-height: 100vh;
+    min-height: 100dvh;
     padding: 1rem;
 }
 
@@ -1268,9 +1269,23 @@ input[type="range"] {
         min-width: 0;
     }
 
+    .player-bar #audio-player {
+        display: none;
+    }
+
+    /* Keep the player bar clear of the iOS/Android home-indicator area */
+    .player-bar {
+        padding-bottom: calc(0.75rem + env(safe-area-inset-bottom));
+    }
+
+    /* Ensure content is never hidden behind the stacked mobile player bar */
+    .app-shell {
+        padding-bottom: calc(0.6rem + env(safe-area-inset-bottom));
+    }
+
     .mini-player {
         right: 0.5rem;
-        bottom: 0.5rem;
+        bottom: calc(0.5rem + env(safe-area-inset-bottom));
         left: 0.5rem;
         max-width: none;
         min-width: 0;
@@ -1281,6 +1296,22 @@ input[type="range"] {
     .mini-cover {
         width: 2.6rem;
         height: 2.6rem;
+    }
+
+    /* Card images: crisp, uniform squares on small screens */
+    .card img {
+        aspect-ratio: 1 / 1;
+        width: 100%;
+        height: auto;
+        image-rendering: auto;
+    }
+
+    /* Make the card play affordance always visible on touch devices */
+    .card .card-play-overlay {
+        opacity: 1;
+        transform: none;
+        pointer-events: auto;
+        background: rgba(29, 185, 84, 0.95);
     }
 
     /* Larger touch targets on phones */

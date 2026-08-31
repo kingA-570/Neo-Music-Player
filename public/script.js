@@ -66,14 +66,9 @@ function escapeHtml(value = '') {
         .replace(/'/g, '&#039;');
 }
 
-const mockPreviews = [
-    'https://www.soundhelix.com/examples/mp3/SoundHelix-Song-1.mp3',
-    'https://www.soundhelix.com/examples/mp3/SoundHelix-Song-2.mp3',
-    'https://www.soundhelix.com/examples/mp3/SoundHelix-Song-3.mp3',
-    'https://www.soundhelix.com/examples/mp3/SoundHelix-Song-4.mp3',
-    'https://www.soundhelix.com/examples/mp3/SoundHelix-Song-5.mp3',
-    'https://www.soundhelix.com/examples/mp3/SoundHelix-Song-6.mp3'
-];
+// No bundled/mock audio is used. Playback intentionally only uses real sources
+// (live stream URLs, the same-origin proxy, or preview URLs), never demo mocks.
+const mockPreviews = [];
 
 const API_BASE = '/api';
 
@@ -170,13 +165,11 @@ function isHttpAudioSource(source) {
 }
 
 function buildTrackSources(track, index) {
-    const mockPreview = mockPreviews[((index % mockPreviews.length) + mockPreviews.length) % mockPreviews.length] || mockPreviews[0] || '';
     const sources = [
         isHttpAudioSource(track.streamUrl) ? track.streamUrl : '',
         track.videoId ? `/api/play/${encodeURIComponent(track.videoId)}` : '',
         isHttpAudioSource(track.preview) ? track.preview : '',
-        isHttpAudioSource(track.previewUrl) ? track.previewUrl : '',
-        mockPreview
+        isHttpAudioSource(track.previewUrl) ? track.previewUrl : ''
     ];
     return [...new Set(sources.filter(Boolean))];
 }
@@ -302,7 +295,8 @@ function renderCards(trackArray) {
         return `
         <article class="card ${index === currentTrackIndex ? 'active' : ''}" data-index="${index}">
             <div class="card-thumb-wrap">
-                <img src="${cover}" alt="${safeAlt}">
+                <img src="${cover}" alt="${safeAlt}" loading="lazy"
+                     onerror="this.onerror=null; this.src='card1img.jpeg';">
                 <span class="card-play-overlay"><i class="fa-solid fa-play"></i></span>
             </div>
             <div class="card-copy">
@@ -612,26 +606,26 @@ function bindEvents() {
     quickPills?.addEventListener('click', (event) => {
         const button = event.target.closest('.quick-pill');
         if (!button) return;
-        const query = button.dataset.query || 'trending music';
+        const query = button.dataset.query || '';
         searchInput.value = query;
         fetchSearch(query);
     });
 
     searchInput.addEventListener('input', (event) => {
         const query = event.target.value.trim();
-        fetchSearch(query || 'trending music');
+        fetchSearch(query);
     });
 
     searchInput.addEventListener('keyup', (event) => {
         if (event.key === 'Enter') {
             const query = event.target.value.trim();
-            fetchSearch(query || 'trending music');
+            fetchSearch(query);
         }
     });
 
     searchInput.addEventListener('change', (event) => {
         const query = event.target.value.trim();
-        fetchSearch(query || 'trending music');
+        fetchSearch(query);
     });
 
     recentCards.addEventListener('click', (event) => {
@@ -849,7 +843,7 @@ function initApp() {
     updatePlayButton();
     audioPlayer.volume = Number(volumeBar.value) || 0.8;
     updateVolumeIcon();
-    fetchSearch('trending music');
+    fetchSearch('');
     
     // Load playlists if authenticated
     if (authToken) {

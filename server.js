@@ -11,9 +11,9 @@ const authRoutes = require('./routes/auth');
 const musicRoutes = require('./routes/music');
 
 const app = express();
-const port = process.env.PORT || 5000;
+const preferredPort = Number(process.env.PORT || 5000);
 const publicDir = path.join(__dirname, 'public');
-const allowedOrigins = (process.env.CORS_ORIGIN || 'http://localhost:5000,http://127.0.0.1:5000')
+const allowedOrigins = (process.env.CORS_ORIGIN || 'http://localhost:5000,http://127.0.0.1:5000,http://localhost:5001,http://127.0.0.1:5001')
   .split(',')
   .map((origin) => origin.trim())
   .filter(Boolean);
@@ -89,8 +89,23 @@ app.get('*', (req, res) => {
 });
 
 // ── Server Start ───────────────────────────────────────────────────────
-app.listen(port, () => {
-  console.log(`🚀 Pulse Music Hub server running at http://localhost:${port}`);
-  console.log(`📡 API available at http://localhost:${port}/api`);
-});
+function startServer(port) {
+  const server = app.listen(port, () => {
+    console.log(`🚀 Pulse Music Hub server running at http://localhost:${port}`);
+    console.log(`📡 API available at http://localhost:${port}/api`);
+  });
+
+  server.on('error', (err) => {
+    if (err.code === 'EADDRINUSE') {
+      const nextPort = port + 1;
+      console.warn(`Port ${port} is busy. Retrying on ${nextPort}...`);
+      startServer(nextPort);
+      return;
+    }
+
+    throw err;
+  });
+}
+
+startServer(preferredPort);
 

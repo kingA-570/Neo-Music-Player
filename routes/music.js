@@ -28,19 +28,38 @@ function findYtDlp() {
   for (const candidate of YTDLP_CANDIDATES) {
     if (candidate === 'yt-dlp') continue;
     try {
-      if (fs.existsSync(candidate)) return candidate;
+      if (fs.existsSync(candidate)) return { command: candidate, args: [] };
     } catch (e) { /* ignore */ }
   }
-  // Fall back to PATH lookup
+
+  const pythonCandidates = [
+    process.env.PYTHON,
+    process.env.PYTHONPATH ? path.join(process.env.PYTHONPATH, '..', 'python.exe') : '',
+    'python',
+    'py',
+    path.join(process.env.LOCALAPPDATA || '', 'Programs', 'Python', 'Python314', 'python.exe'),
+    path.join(process.env.LOCALAPPDATA || '', 'Programs', 'Python', 'Python313', 'python.exe'),
+    path.join(os.homedir(), 'AppData', 'Roaming', 'Python', 'Python314', 'python.exe'),
+    path.join(os.homedir(), 'AppData', 'Roaming', 'Python', 'Python313', 'python.exe')
+  ].filter(Boolean);
+
+  for (const candidate of pythonCandidates) {
+    try {
+      const { execSync } = require('child_process');
+      execSync(`"${candidate}" -c "import yt_dlp"`, { stdio: 'ignore' });
+      return { command: candidate, args: ['-m', 'yt_dlp'] };
+    } catch (e) { /* ignore */ }
+  }
+
   try {
     if (fs.existsSync('C:/Windows/System32/where.exe')) {
       const { execSync } = require('child_process');
       const found = execSync('where yt-dlp', { stdio: 'pipe', encoding: 'utf8' }).trim();
-      if (found) return found.split('\n')[0];
+      if (found) return { command: found.split('\n')[0], args: [] };
     } else {
       const { execSync } = require('child_process');
       const found = execSync('which yt-dlp', { stdio: 'pipe', encoding: 'utf8' }).trim();
-      if (found) return found.split('\n')[0];
+      if (found) return { command: found.split('\n')[0], args: [] };
     }
   } catch (e) { /* not in PATH */ }
   return null;
@@ -97,6 +116,46 @@ async function getAudiusTrending(limit = 20) {
 }
 // ── End Audius API ──────────────────────────────────────────────────
 
+// ── iTunes Search API (real audio fallback, no key / yt-dlp needed) ──
+function formatITunesTrack(item) {
+  let duration = '--:--';
+  if (item.trackTimeMillis) {
+    const totalSec = Math.floor(item.trackTimeMillis / 1000);
+    const m = Math.floor(totalSec / 60);
+    const s = totalSec % 60;
+    duration = `${m}:${s.toString().padStart(2, '0')}`;
+  }
+  const baseThumb = item.artworkUrl100 || '';
+  // Request a higher-resolution cover instead of the tiny 100x100 default.
+  const thumbnail = baseThumb.replace(/100x100bb\.jpg$/, '300x300bb.jpg').replace(/100x100\.jpg$/, '300x300.jpg');
+  const previewUrl = item.previewUrl || '';
+  return {
+    videoId: '',
+    source: 'itunes',
+    id: String(item.trackId || ''),
+    title: item.trackName || item.collectionName || 'Unknown Title',
+    artist: item.artistName || 'Unknown Artist',
+    artists: item.artistName ? [item.artistName] : [],
+    album: item.collectionName || '',
+    duration: duration,
+    thumbnail: thumbnail,
+    cover: thumbnail,
+    preview: previewUrl,
+    previewUrl: previewUrl,
+    streamUrl: previewUrl,
+    youtubeMusicUrl: ''
+  };
+}
+
+async function searchITunes(query, limit = 20) {
+  const url = `https://itunes.apple.com/search?term=${encodeURIComponent(query)}&media=music&limit=${limit}&entity=song`;
+  const res = await fetch(url, { signal: AbortSignal.timeout(10000) });
+  if (!res.ok) throw new Error(`iTunes search failed: ${res.status}`);
+  const data = await res.json();
+  return (data.results || []).filter((r) => r.previewUrl).map(formatITunesTrack);
+}
+// ── End iTunes API ───────────────────────────────────────────────────
+
 async function getAudioStreamUrl(videoId) {
   if (!videoId) return '';
   if (!YTDLP) {
@@ -107,9 +166,12 @@ async function getAudioStreamUrl(videoId) {
     return '';
   }
 
+  const command = YTDLP.command;
+  const extraArgs = YTDLP.args || [];
   const watchUrl = `https://www.youtube.com/watch?v=${videoId}`;
   const attempts = [
     [
+      ...extraArgs,
       '--get-url',
       '--format', 'bestaudio[ext=m4a]/bestaudio/best',
       '--extractor-args', 'youtube:player_client=android,web',
@@ -119,6 +181,7 @@ async function getAudioStreamUrl(videoId) {
       watchUrl
     ],
     [
+      ...extraArgs,
       '--get-url',
       '--format', 'bestaudio/best',
       '--no-warnings',
@@ -127,6 +190,7 @@ async function getAudioStreamUrl(videoId) {
       watchUrl
     ],
     [
+      ...extraArgs,
       '-g',
       '--format', 'bestaudio/best',
       '--no-warnings',
@@ -138,7 +202,7 @@ async function getAudioStreamUrl(videoId) {
 
   for (const args of attempts) {
     const streamUrl = await new Promise((resolve) => {
-      execFile(YTDLP, args, { timeout: 30000, maxBuffer: 1024 * 1024 }, (err, stdout, stderr) => {
+      execFile(command, args, { timeout: 30000, maxBuffer: 1024 * 1024 }, (err, stdout, stderr) => {
         if (err) {
           console.error(`yt-dlp failed for ${videoId}:`, (stderr || err.message || '').trim());
           return resolve('');
@@ -251,8 +315,9 @@ function getFallbackTracks(query) {
     duration: track.duration,
     thumbnail: `card${index + 1}img.jpeg`,
     cover: `card${index + 1}img.jpeg`,
-    preview: mockPreviews[index],
-    previewUrl: mockPreviews[index],
+    preview: '',
+    previewUrl: '',
+    streamUrl: '',
     youtubeMusicUrl: `https://music.youtube.com/search?q=${encodeURIComponent(`${query} ${track.title}`)}`
   }));
 }
@@ -275,15 +340,24 @@ function formatTrack(item) {
     duration = `${m}:${s.toString().padStart(2, '0')}`;
   }
 
-  // thumbnails from parser: array of {url,width,height} objects
+  // Prefer a real, high-resolution YouTube video thumbnail derived from the videoId.
+  // The parser's "thumbnail" field is usually a tiny 60x60 channel avatar which looks
+  // blurry when stretched over the large homepage cards.
   let thumbnail = '';
-  const thumbs = item.thumbnails || item.thumbnail;
-  if (Array.isArray(thumbs) && thumbs.length > 0) {
-    thumbnail = thumbs[0].url || thumbs[0] || '';
-  } else if (typeof thumbs === 'object' && thumbs !== null) {
-    thumbnail = thumbs.url || thumbs[0]?.url || '';
-  } else if (typeof thumbs === 'string') {
-    thumbnail = thumbs;
+  if (item.videoId) {
+    thumbnail = `https://i.ytimg.com/vi/${item.videoId}/hqdefault.jpg`;
+  }
+  if (!thumbnail) {
+    const thumbs = item.thumbnails || item.thumbnail;
+    if (Array.isArray(thumbs) && thumbs.length > 0) {
+      // Pick the highest-quality entry instead of the smallest (first) one.
+      const candidate = thumbs.sort((a, b) => (b.width || 0) - (a.width || 0))[0];
+      thumbnail = candidate?.url || thumbs[0] || '';
+    } else if (typeof thumbs === 'object' && thumbs !== null) {
+      thumbnail = thumbs.url || thumbs[0]?.url || '';
+    } else if (typeof thumbs === 'string') {
+      thumbnail = thumbs;
+    }
   }
 
   let album = '';
@@ -325,18 +399,40 @@ router.get('/search', optionalAuth, async (req, res) => {
     try {
       // Search using YouTube Music API
       let results = await api.search(query, 'SONG');
-      
+
       if (results && results.content) {
         tracks = results.content.slice(0, 20).map(formatTrack);
       } else if (Array.isArray(results)) {
         tracks = results.slice(0, 20).map(formatTrack);
+      }
+
+      // Fill in real stream URLs when yt-dlp is available.
+      if (tracks.length > 0 && YTDLP) {
+        for (const track of tracks) {
+          if (!track.videoId || (track.streamUrl && /^https?:\/\//.test(track.streamUrl))) continue;
+          const streamUrl = await getAudioStreamUrl(track.videoId);
+          if (streamUrl) {
+            track.streamUrl = streamUrl;
+            track.previewUrl = streamUrl;
+            track.preview = streamUrl;
+          }
+        }
+      }
+
+      // On servers without yt-dlp (e.g. Render), YouTube search still returns results but
+      // none of them are playable (streams need yt-dlp and are IP-locked). Drop them here so
+      // the fallback chain moves on to reliable real-audio sources (Audius / iTunes) instead
+      // of surfacing songs that silently fail to play.
+      if (tracks.length > 0 && !YTDLP) {
+        tracks = tracks.filter((t) => t.streamUrl && /^https?:\/\//.test(t.streamUrl));
+        if (tracks.length) searchSource = 'youtube';
       }
     } catch (searchError) {
       console.error('YouTube Music search error:', searchError.message);
       tracks = [];
     }
 
-    // Fallback #1: Audius API
+    // Fallback #1: Audius API (real, directly-streamable audio without yt-dlp)
     if (tracks.length === 0) {
       try {
         console.log('Falling back to Audius search...');
@@ -348,17 +444,27 @@ router.get('/search', optionalAuth, async (req, res) => {
       }
     }
 
-    // Fallback #2: mock data
+    // Fallback #2: iTunes Search API (real 30s preview MP3s, no key / yt-dlp needed)
+    if (tracks.length === 0) {
+      try {
+        console.log('Falling back to iTunes search...');
+        tracks = await searchITunes(query, 20);
+        searchSource = 'itunes';
+      } catch (itunesError) {
+        console.error('iTunes search error:', itunesError.message);
+        tracks = [];
+      }
+    }
+
+    // Fallback #3: mock data only when there are truly no results to show.
     if (tracks.length === 0) {
       tracks = getFallbackTracks(query);
       searchSource = 'mock';
     }
 
-    // Add a playable preview to tracks that have no stream URL (mock safety net)
-    tracks = tracks.map((track, i) => {
-      if (!track.videoId && !track.streamUrl && !track.preview) {
-        track.preview = mockPreviews[i % mockPreviews.length];
-        track.previewUrl = mockPreviews[i % mockPreviews.length];
+    tracks = tracks.map((track) => {
+      if (!track.preview && track.previewUrl) {
+        track.preview = track.previewUrl;
       }
       return track;
     });
