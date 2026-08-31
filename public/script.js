@@ -52,9 +52,25 @@ const playlistList = document.getElementById('playlist-list');
 const createPlaylistBtn = document.getElementById('create-playlist-btn');
 const addToPlaylistBtn = document.getElementById('add-to-playlist-btn');
 
+const homeView = document.getElementById('home-view');
+const searchView = document.getElementById('search-view');
+const historySection = document.getElementById('history-section');
+const historyCards = document.getElementById('history-cards');
+const trendingCards = document.getElementById('trending-cards');
+const brandLink = document.getElementById('brand-link');
+const navHome = document.getElementById('nav-home');
+const navSearch = document.getElementById('nav-search');
+const navLibrary = document.getElementById('nav-library');
+const discoverBtn = document.getElementById('discover-btn');
+const resultCount = document.getElementById('result-count');
+
+let trendingTracks = [];
+let watchHistory = [];
+
 const STORAGE_KEYS = {
     token: 'pulse-token',
-    user: 'pulse-user'
+    user: 'pulse-user',
+    history: 'pulse-watch-history'
 };
 
 function escapeHtml(value = '') {
@@ -427,6 +443,135 @@ function toggleAuthModal(forceOpen) {
     authModal.setAttribute('aria-hidden', String(!shouldOpen));
 }
 
+function loadWatchHistory() {
+    try {
+        const stored = localStorage.getItem(STORAGE_KEYS.history);
+        watchHistory = stored ? JSON.parse(stored) : [];
+    } catch (error) {
+        watchHistory = [];
+    }
+}
+
+function saveWatchHistory() {
+    try {
+        localStorage.setItem(STORAGE_KEYS.history, JSON.stringify(watchHistory.slice(0, 20)));
+    } catch (error) { /* ignore */ }
+}
+
+function trackKey(track) {
+    return track.videoId || track.id || track.previewUrl || track.streamUrl || track.title || '';
+}
+
+function addToWatchHistory(track) {
+    if (!track) return;
+    const key = trackKey(track);
+    watchHistory = watchHistory.filter((t) => trackKey(t) !== key);
+    watchHistory.unshift(track);
+    saveWatchHistory();
+    renderWatchHistory();
+}
+
+function renderWatchHistory() {
+    if (!historyCards) return;
+    if (!watchHistory.length) {
+        historyCards.innerHTML = '<div class="card empty-card">Nothing watched yet — play a song and it appears here.</div>';
+        return;
+    }
+    historyCards.innerHTML = watchHistory.slice(0, 12).map((track, index) => {
+        const title = escapeHtml(track.title || 'Untitled Track');
+        const artist = escapeHtml(formatArtists(track.artists));
+        const cover = track.cover || track.thumbnail || 'card1img.jpeg';
+        const safeAlt = escapeHtml(track.title || 'Track cover');
+        return `
+        <article class="card" data-hindex="${index}">
+            <div class="card-thumb-wrap">
+                <img src="${cover}" alt="${safeAlt}" loading="lazy"
+                     onerror="this.onerror=null; this.src='card1img.jpeg';">
+                <span class="card-play-overlay"><i class="fa-solid fa-play"></i></span>
+            </div>
+            <div class="card-copy">
+                <strong>${title}</strong>
+                <span>${artist}</span>
+            </div>
+        </article>
+    `;
+    }).join('');
+}
+
+function renderTrending() {
+    if (!trendingCards) return;
+    if (!trendingTracks.length) {
+        trendingCards.innerHTML = '<div class="card empty-card">No trending tracks available right now.</div>';
+        return;
+    }
+    trendingCards.innerHTML = trendingTracks.slice(0, 12).map((track, index) => {
+        const title = escapeHtml(track.title || 'Untitled Track');
+        const artist = escapeHtml(formatArtists(track.artists));
+        const cover = track.cover || track.thumbnail || 'card1img.jpeg';
+        const safeAlt = escapeHtml(track.title || 'Track cover');
+        return `
+        <article class="card" data-tindex="${index}">
+            <div class="card-thumb-wrap">
+                <img src="${cover}" alt="${safeAlt}" loading="lazy"
+                     onerror="this.onerror=null; this.src='card1img.jpeg';">
+                <span class="card-play-overlay"><i class="fa-solid fa-play"></i></span>
+            </div>
+            <div class="card-copy">
+                <strong>${title}</strong>
+                <span>${artist}</span>
+            </div>
+        </article>
+    `;
+    }).join('');
+}
+
+// Play a track that lives in the given list (renders + records to history).
+function playFromList(list, index) {
+    const track = list[index];
+    if (!track) return;
+    currentTracks = list;
+    currentTrackIndex = index;
+    addToWatchHistory(track);
+    playTrack(index);
+}
+
+let trendingLoading = false;
+async function loadTrending() {
+    if (trendingLoading) return;
+    if (trendingTracks.length) return;
+    trendingLoading = true;
+    try {
+        const response = await fetch('/api/search?q=trending');
+        if (!response.ok) return;
+        const results = await response.json();
+        trendingTracks = Array.isArray(results) ? results : results.tracks || [];
+        renderTrending();
+    } catch (error) {
+        trendingTracks = [];
+        renderTrending();
+    } finally {
+        trendingLoading = false;
+    }
+}
+
+function showHome() {
+    homeView?.classList.remove('hidden');
+    searchView?.classList.add('hidden');
+    navHome?.classList.add('active');
+    navSearch?.classList.remove('active');
+    searchInput.value = '';
+    if (!trendingTracks.length) {
+        loadTrending();
+    }
+}
+
+function showSearch() {
+    homeView?.classList.add('hidden');
+    searchView?.classList.remove('hidden');
+    navSearch?.classList.add('active');
+    navHome?.classList.remove('active');
+}
+
 async function fetchSearch(query) {
     if (!query) {
         currentTracks = [];
@@ -435,6 +580,7 @@ async function fetchSearch(query) {
         renderTrackList(currentTracks);
         updatePlayerInfo(null);
         pausePlayback();
+        showHome();
         return;
     }
 
@@ -456,6 +602,10 @@ async function fetchSearch(query) {
         renderCards(currentTracks);
         renderTrackList(currentTracks);
         updatePlayerInfo(currentTracks[currentTrackIndex] || null);
+        showSearch();
+        if (resultCount) {
+            resultCount.textContent = currentTracks.length ? `${currentTracks.length} results` : 'No results';
+        }
     } catch (error) {
         recentCards.innerHTML = '<div class="card empty-card">Search failed, please try again.</div>';
         trackList.innerHTML = '<div class="track-row no-results">Search failed, please try again.</div>';
@@ -474,6 +624,7 @@ function playTrack(index) {
     updatePlayerInfo(track);
     renderCards(currentTracks);
     renderTrackList(currentTracks);
+    addToWatchHistory(track);
 
     currentTrackSources = buildTrackSources(track, index);
     sourceFallbackIndex = 0;
@@ -632,6 +783,42 @@ function bindEvents() {
         const card = event.target.closest('.card');
         if (!card) return;
         playTrack(Number(card.dataset.index));
+    });
+
+    trendingCards?.addEventListener('click', (event) => {
+        const card = event.target.closest('.card');
+        if (!card) return;
+        playFromList(trendingTracks, Number(card.dataset.tindex));
+    });
+
+    historyCards?.addEventListener('click', (event) => {
+        const card = event.target.closest('.card');
+        if (!card) return;
+        playFromList(watchHistory, Number(card.dataset.hindex));
+    });
+
+    // Home / logo / hash routing
+    brandLink?.addEventListener('click', (event) => {
+        event.preventDefault();
+        showHome();
+    });
+    navHome?.addEventListener('click', (event) => {
+        event.preventDefault();
+        showHome();
+    });
+    navSearch?.addEventListener('click', (event) => {
+        event.preventDefault();
+        showSearch();
+        setTimeout(() => searchInput.focus(), 50);
+    });
+    discoverBtn?.addEventListener('click', () => {
+        showHome();
+        loadTrending();
+    });
+    window.addEventListener('hashchange', () => {
+        const hash = window.location.hash;
+        if (hash === '#search') showSearch();
+        else showHome();
     });
 
     trackList.addEventListener('click', (event) => {
@@ -837,14 +1024,24 @@ function initApp() {
     }
     
     playlists = [];
+    loadWatchHistory();
     bindEvents();
     updateAuthUi();
     renderPlaylists();
     updatePlayButton();
     audioPlayer.volume = Number(volumeBar.value) || 0.8;
     updateVolumeIcon();
-    fetchSearch('');
-    
+
+    // Default view is the homepage (hero + watch history + trending)
+    renderWatchHistory();
+    loadTrending();
+    const initialHash = window.location.hash;
+    if (initialHash === '#search') {
+        showSearch();
+    } else {
+        showHome();
+    }
+
     // Load playlists if authenticated
     if (authToken) {
         loadUserPlaylists();
