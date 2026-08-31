@@ -65,7 +65,9 @@ function findYtDlp() {
   return null;
 }
 
-let YTDLP = findYtDlp();
+// DISABLE_YTDLP=1 forces the no-yt-dlp path (useful to replicate Render locally,
+// where yt-dlp is absent and the iTunes audio-fallback is used).
+let YTDLP = process.env.DISABLE_YTDLP ? null : findYtDlp();
 
 // ── Audius API (fallback streaming) ─────────────────────────────────
 const AUDIUS_BASE = 'https://discoveryprovider.audius.co';
@@ -153,6 +155,64 @@ async function searchITunes(query, limit = 20) {
   if (!res.ok) throw new Error(`iTunes search failed: ${res.status}`);
   const data = await res.json();
   return (data.results || []).filter((r) => r.previewUrl).map(formatITunesTrack);
+}
+
+function normalizeText(value) {
+  return String(value || '')
+    .toLowerCase()
+    .normalize('NFD')
+    .replace(/[\u0300-\u036f]/g, '')
+    .replace(/[^a-z0-9]+/g, ' ')
+    .trim();
+}
+
+// Find a real, playable iTunes preview for an individual track that came from
+// another source (e.g. a YouTube result). This gives YouTube songs a genuine
+// playable audio source even when yt-dlp is unavailable or IP-locked on Render.
+async function matchITunesTrack(track) {
+  const title = track.title || '';
+  const artist = (track.artists && track.artists[0]) || track.artist || '';
+  if (!title) return null;
+  try {
+    const url = `https://itunes.apple.com/search?term=${encodeURIComponent(title)}&media=music&limit=6&entity=song`;
+    const res = await fetch(url, { signal: AbortSignal.timeout(10000) });
+    if (!res.ok) return null;
+    const data = await res.json();
+    const results = (data.results || []).filter((r) => r.previewUrl);
+    if (!results.length) return null;
+
+    const normTitle = normalizeText(title);
+    const normArtist = artist ? normalizeText(artist) : '';
+
+    let best = results[0];
+    let bestScore = 0;
+    results.forEach((r, i) => {
+      let score = 0;
+      const rt = normalizeText(r.trackName);
+      if (rt === normTitle) score += 3;
+      else if (rt.includes(normTitle) || normTitle.includes(rt)) score += 1;
+      if (normArtist) {
+        const ra = normalizeText(r.artistName);
+        if (ra === normArtist) score += 3;
+        else if (ra.includes(normArtist) || normArtist.includes(ra)) score += 1;
+      }
+      // Prefer earlier (more popular) results on ties.
+      if (score > bestScore || (score === bestScore && i === 0 && bestScore === 0)) {
+        if (score > bestScore) {
+          bestScore = score;
+          best = r;
+        }
+      }
+    });
+
+    // Only accept a match that is at least a plausible match, otherwise the
+    // audio could be a completely unrelated song.
+    if (bestScore < 2) return null;
+    return formatITunesTrack(best);
+  } catch (error) {
+    console.error('iTunes single-track match error:', error.message);
+    return null;
+  }
 }
 // ── End iTunes API ───────────────────────────────────────────────────
 
@@ -419,12 +479,25 @@ router.get('/search', optionalAuth, async (req, res) => {
         }
       }
 
-      // On servers without yt-dlp (e.g. Render), YouTube search still returns results but
-      // none of them are playable (streams need yt-dlp and are IP-locked). Drop them here so
-      // the fallback chain moves on to reliable real-audio sources (Audius / iTunes) instead
-      // of surfacing songs that silently fail to play.
+      // On servers without yt-dlp (e.g. Render), YouTube results have no direct
+      // stream (yt-dlp extracts those, and YouTube blocks datacenter IPs). Give each
+      // YouTube track a real, playable iTunes preview matched by title/artist so the
+      // song still actually plays, and keep only the ones that got a real source.
       if (tracks.length > 0 && !YTDLP) {
-        tracks = tracks.filter((t) => t.streamUrl && /^https?:\/\//.test(t.streamUrl));
+        const annotated = await Promise.all(
+          tracks.slice(0, 12).map(async (track) => {
+            if (track.streamUrl && /^https?:\/\//.test(track.streamUrl)) return track;
+            const match = await matchITunesTrack(track);
+            if (!match || !match.streamUrl) return null;
+            track.source = 'itunes-fallback';
+            track.id = match.id || track.id;
+            track.streamUrl = match.streamUrl;
+            track.preview = match.streamUrl;
+            track.previewUrl = match.streamUrl;
+            return track;
+          })
+        );
+        tracks = annotated.filter(Boolean);
         if (tracks.length) searchSource = 'youtube';
       }
     } catch (searchError) {
@@ -691,6 +764,85 @@ router.get('/play/:videoId', async (req, res) => {
   } catch (error) {
     clearTimeout(timeout);
     console.error('Play proxy error:', error.message);
+    if (!res.headersSent) {
+      res.status(500).json({ error: 'Failed to stream audio' });
+    } else {
+      res.destroy();
+    }
+  }
+});
+
+// ── Generic same-origin audio proxy: /api/stream?u=<encoded url> ─────
+// Serves any real audio URL through our own HTTPS origin. The browser never
+// contacts third-party audio CDNs directly, so playback is never blocked by
+// CORS, mixed-content, or geo restrictions (this is what made direct
+// iTunes/Audius streams fail and show "Stream unavailable").
+const ALLOWED_STREAM_HOSTS = [
+  'itunes.apple.com',
+  'audio-ssl.itunes.apple.com',
+  'audio.itunes.apple.com',
+  'mzstatic.com',
+  'aod.itunes.apple.com',
+  'discoveryprovider.audius.co',
+  'creatornode.audius.co',
+  'audius.co'
+];
+
+function isAllowedStreamUrl(value) {
+  let parsed;
+  try {
+    parsed = new URL(value);
+  } catch (e) {
+    return false;
+  }
+  if (parsed.protocol !== 'https:' && parsed.protocol !== 'http:') return false;
+  const host = parsed.hostname.toLowerCase();
+  return ALLOWED_STREAM_HOSTS.some((allowed) => host === allowed || host.endsWith('.' + allowed));
+}
+
+router.get('/stream', async (req, res) => {
+  const target = String(req.query.u || '');
+  if (!isAllowedStreamUrl(target)) {
+    return res.status(400).json({ error: 'Invalid or disallowed stream URL' });
+  }
+
+  const timeout = setTimeout(() => {
+    if (!res.headersSent) res.status(504).json({ error: 'Stream timed out' });
+  }, 30000);
+
+  try {
+    const upstream = await fetchUpstreamResponse(target, req.headers.range);
+    clearTimeout(timeout);
+
+    if (!upstream.ok) {
+      return res.status(502).json({ error: 'Upstream stream request failed' });
+    }
+    if (!upstream.body) {
+      return res.status(502).json({ error: 'Upstream returned no audio body' });
+    }
+
+    res.status(upstream.status);
+    const contentType = upstream.headers.get('content-type');
+    if (contentType) res.setHeader('Content-Type', contentType);
+    const contentLength = upstream.headers.get('content-length');
+    if (contentLength) res.setHeader('Content-Length', contentLength);
+    const contentRange = upstream.headers.get('content-range');
+    if (contentRange) res.setHeader('Content-Range', contentRange);
+    res.setHeader('Accept-Ranges', 'bytes');
+    res.setHeader('Cache-Control', 'no-store');
+    res.setHeader('Access-Control-Allow-Origin', '*');
+
+    const { Readable } = require('stream');
+    const stream = Readable.fromWeb(upstream.body);
+    stream.on('error', (streamError) => {
+      console.error('Stream proxy error:', streamError.message);
+      res.destroy();
+    });
+    res.on('close', () => stream.destroy());
+    stream.pipe(res);
+  } catch (error) {
+    clearTimeout(timeout);
+    console.error('Stream proxy error:', error.message);
     if (!res.headersSent) {
       res.status(500).json({ error: 'Failed to stream audio' });
     } else {

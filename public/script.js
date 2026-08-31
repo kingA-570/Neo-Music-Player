@@ -180,12 +180,30 @@ function isHttpAudioSource(source) {
     return typeof source === 'string' && /^https?:\/\//.test(source);
 }
 
+function proxyStreamUrl(url) {
+    if (!isHttpAudioSource(url)) return '';
+    return `/api/stream?u=${encodeURIComponent(url)}`;
+}
+
 function buildTrackSources(track, index) {
+    const rawStream = isHttpAudioSource(track.streamUrl) ? track.streamUrl : '';
+    const rawPreview = isHttpAudioSource(track.preview) ? track.preview : '';
+    const rawPreviewUrl = isHttpAudioSource(track.previewUrl) ? track.previewUrl : '';
+
     const sources = [
-        isHttpAudioSource(track.streamUrl) ? track.streamUrl : '',
+        // 1. Genuine YouTube extraction through the same-origin /api/play proxy
+        //    (plays the full song when yt-dlp is available).
         track.videoId ? `/api/play/${encodeURIComponent(track.videoId)}` : '',
-        isHttpAudioSource(track.preview) ? track.preview : '',
-        isHttpAudioSource(track.previewUrl) ? track.previewUrl : ''
+        // 2. Same-origin proxy for any real remote audio (iTunes/Audius). Routing
+        //    through our own origin avoids CORS and mixed-content blocks that would
+        //    otherwise make playback show "Stream unavailable".
+        proxyStreamUrl(rawStream),
+        proxyStreamUrl(rawPreview),
+        proxyStreamUrl(rawPreviewUrl),
+        // 3. Raw URLs as a last resort (in case the proxy host is ever disallowed).
+        rawStream,
+        rawPreview,
+        rawPreviewUrl
     ];
     return [...new Set(sources.filter(Boolean))];
 }
