@@ -339,7 +339,7 @@ input {
     display: flex;
     justify-content: space-between;
     gap: 1rem;
-    align-items: baseline;
+    align-items: center;
 }
 
 .section-header h2 {
@@ -350,6 +350,67 @@ input {
 .section-header span {
     opacity: 0.7;
     font-size: 0.95rem;
+}
+
+.section-header-left {
+    display: flex;
+    flex-direction: column;
+    gap: 0.15rem;
+}
+
+.clear-history-btn {
+    display: inline-flex;
+    align-items: center;
+    gap: 0.4rem;
+    padding: 0.5rem 0.9rem;
+    border-radius: 999px;
+    border: 1px solid rgba(255, 255, 255, 0.14);
+    background: rgba(255, 255, 255, 0.06);
+    color: #e5e7eb;
+    font-size: 0.85rem;
+    font-weight: 600;
+    cursor: pointer;
+    transition: background 0.18s ease, border-color 0.18s ease, color 0.18s ease;
+    white-space: nowrap;
+    flex-shrink: 0;
+}
+
+.clear-history-btn:hover {
+    background: rgba(239, 68, 68, 0.15);
+    border-color: rgba(239, 68, 68, 0.35);
+    color: #fecaca;
+}
+
+.card-remove-btn {
+    position: absolute;
+    top: 0.6rem;
+    right: 0.6rem;
+    z-index: 2;
+    width: 1.9rem;
+    height: 1.9rem;
+    display: grid;
+    place-items: center;
+    border: none;
+    border-radius: 999px;
+    background: rgba(0, 0, 0, 0.62);
+    backdrop-filter: blur(8px);
+    color: #fff;
+    font-size: 0.85rem;
+    cursor: pointer;
+    opacity: 0;
+    transform: scale(0.85);
+    transition: opacity 0.18s ease, transform 0.18s ease, background 0.18s ease;
+}
+
+.card:hover .card-remove-btn,
+.card:focus-within .card-remove-btn {
+    opacity: 1;
+    transform: scale(1);
+}
+
+.card-remove-btn:hover {
+    background: rgba(239, 68, 68, 0.9);
+    color: #fff;
 }
 
 .cards {
@@ -872,6 +933,10 @@ input {
     .card .card-play-overlay,
     .track-row .row-play-overlay {
         display: none;
+    }
+    .card .card-remove-btn {
+        opacity: 1;
+        transform: none;
     }
 }
 

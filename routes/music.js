@@ -479,26 +479,42 @@ router.get('/search', optionalAuth, async (req, res) => {
         }
       }
 
-      // On servers without yt-dlp (e.g. Render), YouTube results have no direct
-      // stream (yt-dlp extracts those, and YouTube blocks datacenter IPs). Give each
-      // YouTube track a real, playable iTunes preview matched by title/artist so the
-      // song still actually plays, and keep only the ones that got a real source.
-      if (tracks.length > 0 && !YTDLP) {
-        const annotated = await Promise.all(
-          tracks.slice(0, 12).map(async (track) => {
-            if (track.streamUrl && /^https?:\/\//.test(track.streamUrl)) return track;
-            const match = await matchITunesTrack(track);
-            if (!match || !match.streamUrl) return null;
+      // Ensure every YouTube result has a playable audio source. When yt-dlp
+      // succeeded, track.streamUrl is already a (IP-locked) googlevideo URL and
+      // will be played via /api/play proxy. When it failed or YTDLP is absent
+      // (Render), we hydrate with a real iTunes preview so "some songs aren't
+      // playing" never happens.
+      if (tracks.length > 0) {
+        const indicesToFix = tracks
+          .map((t, i) => (!t.streamUrl || !/^https?:\/\//.test(t.streamUrl) ? i : -1))
+          .filter((i) => i >= 0)
+          .slice(0, 20);
+        if (indicesToFix.length) {
+          const results = await Promise.all(
+            indicesToFix.map(async (idx) => {
+              const track = tracks[idx];
+              const match = await matchITunesTrack(track);
+              return { idx, match };
+            })
+          );
+          results.forEach(({ idx, match }) => {
+            if (!match || !match.streamUrl) return;
+            const track = tracks[idx];
+            // Preserve YouTube metadata (title/artist/cover) but use iTunes audio
             track.source = 'itunes-fallback';
             track.id = match.id || track.id;
             track.streamUrl = match.streamUrl;
             track.preview = match.streamUrl;
             track.previewUrl = match.streamUrl;
-            return track;
-          })
-        );
-        tracks = annotated.filter(Boolean);
-        if (tracks.length) searchSource = 'youtube';
+          });
+        }
+        // On servers without yt-dlp, /api/play cannot rescue unplayable YouTube
+        // IDs, so drop any tracks that still have no stream to guarantee every
+        // returned card is playable.
+        if (!YTDLP) {
+          tracks = tracks.filter((t) => t.streamUrl && /^https?:\/\//.test(t.streamUrl));
+          if (tracks.length) searchSource = 'youtube-itunes';
+        }
       }
     } catch (searchError) {
       console.error('YouTube Music search error:', searchError.message);
@@ -783,9 +799,17 @@ const ALLOWED_STREAM_HOSTS = [
   'audio.itunes.apple.com',
   'mzstatic.com',
   'aod.itunes.apple.com',
+  'aod-ssl.itunes.apple.com',
   'discoveryprovider.audius.co',
   'creatornode.audius.co',
-  'audius.co'
+  'audius.co',
+  // YouTube / googlevideo must be proxied same-origin — direct browser fetch
+  // fails with CORS + IP-lock (url signed for server IP, not client IP).
+  'googlevideo.com',
+  'youtube.com',
+  'ytimg.com',
+  'google.com',
+  'gvt1.com'
 ];
 
 function isAllowedStreamUrl(value) {

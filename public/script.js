@@ -57,6 +57,7 @@ const searchView = document.getElementById('search-view');
 const historySection = document.getElementById('history-section');
 const historyCards = document.getElementById('history-cards');
 const trendingCards = document.getElementById('trending-cards');
+const clearHistoryBtn = document.getElementById('clear-history-btn');
 const brandLink = document.getElementById('brand-link');
 const navHome = document.getElementById('nav-home');
 const navSearch = document.getElementById('nav-search');
@@ -190,17 +191,23 @@ function buildTrackSources(track, index) {
     const rawPreview = isHttpAudioSource(track.preview) ? track.preview : '';
     const rawPreviewUrl = isHttpAudioSource(track.previewUrl) ? track.previewUrl : '';
 
+    // Mock tracks (fallback when all APIs fail) have no real audio — don't
+    // try /api/play with a synthetic `mock-` id, it will always be 404 and
+    // shows "Stream unavailable" which users report as "some songs aren't playing".
+    const hasRealVideoId = typeof track.videoId === 'string' && track.videoId && !track.videoId.startsWith('mock-');
+
     const sources = [
         // 1. Genuine YouTube extraction through the same-origin /api/play proxy
-        //    (plays the full song when yt-dlp is available).
-        track.videoId ? `/api/play/${encodeURIComponent(track.videoId)}` : '',
-        // 2. Same-origin proxy for any real remote audio (iTunes/Audius). Routing
-        //    through our own origin avoids CORS and mixed-content blocks that would
-        //    otherwise make playback show "Stream unavailable".
+        //    (plays the full song when yt-dlp is available). Must be first so
+        //    IP-locked googlevideo URLs from search-time are refreshed server-side.
+        hasRealVideoId ? `/api/play/${encodeURIComponent(track.videoId)}` : '',
+        // 2. Same-origin proxy for any real remote audio (iTunes/Audius/googlevideo).
+        //    Routing through our own origin avoids CORS + IP-lock blocks that would
+        //    otherwise make the <audio> tag show "Stream unavailable".
         proxyStreamUrl(rawStream),
         proxyStreamUrl(rawPreview),
         proxyStreamUrl(rawPreviewUrl),
-        // 3. Raw URLs as a last resort (in case the proxy host is ever disallowed).
+        // 3. Raw URLs as a last resort (proxy allow-list may lag).
         rawStream,
         rawPreview,
         rawPreviewUrl
@@ -476,6 +483,20 @@ function saveWatchHistory() {
     } catch (error) { /* ignore */ }
 }
 
+function removeFromWatchHistory(index) {
+    if (!Number.isInteger(index) || index < 0 || index >= watchHistory.length) return;
+    watchHistory.splice(index, 1);
+    saveWatchHistory();
+    renderWatchHistory();
+}
+
+function clearWatchHistory() {
+    if (!watchHistory.length) return;
+    watchHistory = [];
+    saveWatchHistory();
+    renderWatchHistory();
+}
+
 function trackKey(track) {
     return track.videoId || track.id || track.previewUrl || track.streamUrl || track.title || '';
 }
@@ -491,6 +512,9 @@ function addToWatchHistory(track) {
 
 function renderWatchHistory() {
     if (!historyCards) return;
+    if (clearHistoryBtn) {
+        clearHistoryBtn.style.display = watchHistory.length ? 'inline-flex' : 'none';
+    }
     if (!watchHistory.length) {
         historyCards.innerHTML = '<div class="card empty-card">Nothing watched yet — play a song and it appears here.</div>';
         return;
@@ -502,6 +526,7 @@ function renderWatchHistory() {
         const safeAlt = escapeHtml(track.title || 'Track cover');
         return `
         <article class="card" data-hindex="${index}">
+            <button class="card-remove-btn" type="button" data-remove-index="${index}" aria-label="Remove from Continue Watching" title="Remove"><i class="fa-solid fa-xmark"></i></button>
             <div class="card-thumb-wrap">
                 <img src="${cover}" alt="${safeAlt}" loading="lazy"
                      onerror="this.onerror=null; this.src='card1img.jpeg';">
@@ -659,7 +684,15 @@ function playTrack(index) {
 
 // When a source fails, retry the next fallback source for the current track
 audioPlayer.addEventListener('error', function () {
+    console.warn('Audio source failed:', currentTrackSources[sourceFallbackIndex], audioPlayer.error);
     retryCurrentTrackSource(sourceFallbackIndex);
+});
+audioPlayer.addEventListener('stalled', function () {
+    // Network stall often means upstream 403/expire for googlevideo — try next fallback
+    if (audioPlayer.readyState < 2) {
+        console.warn('Audio stalled, retrying fallback:', currentTrackSources[sourceFallbackIndex]);
+        retryCurrentTrackSource(sourceFallbackIndex);
+    }
 });
 
 function togglePlayback() {
@@ -810,9 +843,21 @@ function bindEvents() {
     });
 
     historyCards?.addEventListener('click', (event) => {
+        const removeBtn = event.target.closest('.card-remove-btn');
+        if (removeBtn) {
+            event.stopPropagation();
+            event.preventDefault();
+            const idx = Number(removeBtn.dataset.removeIndex);
+            removeFromWatchHistory(idx);
+            return;
+        }
         const card = event.target.closest('.card');
         if (!card) return;
         playFromList(watchHistory, Number(card.dataset.hindex));
+    });
+
+    clearHistoryBtn?.addEventListener('click', () => {
+        clearWatchHistory();
     });
 
     // Home / logo / hash routing
